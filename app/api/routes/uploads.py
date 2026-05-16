@@ -2,15 +2,16 @@ import os
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models.upload import Upload
 from app.repositories.upload_repository import create_upload, get_uploads, update_upload_status
 from app.schemas.upload import UploadResponse
 from app.services.excel_service import SUPPORTED_EXTENSIONS, read_financial_file
 
-from fastapi.responses import FileResponse
-from app.models.upload import Upload
+
 
 router = APIRouter(prefix="/uploads", tags=["Uploads"])
 
@@ -75,3 +76,25 @@ async def upload_file(
 @router.get("/", response_model=list[UploadResponse])
 def list_uploaded_files(db: Session = Depends(get_db)):
     return get_uploads(db)
+
+
+@router.get("/{upload_id}/download")
+def download_uploaded_file(
+    upload_id: int,
+    db: Session = Depends(get_db)
+):
+    upload = db.query(Upload).filter(Upload.id == upload_id).first()
+
+    if not upload:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+    file_path = os.path.join(UPLOAD_DIR, upload.stored_filename)
+
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Archivo físico no encontrado")
+
+    return FileResponse(
+        path=file_path,
+        filename=upload.filename,
+        media_type="application/octet-stream"
+    )
