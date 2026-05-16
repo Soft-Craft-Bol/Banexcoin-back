@@ -1,6 +1,9 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
+from sqlalchemy.orm import relationship
 from datetime import datetime
+
 from app.core.database import Base
+
 
 class Transaction(Base):
     __tablename__ = "transactions"
@@ -12,4 +15,7 @@ class Transaction(Base):
     amount = Column(Float, nullable=False)
     currency = Column(String, default="USD")
     status = Column(String, default="pending")
+    asset_id = Column(Integer, ForeignKey("assets.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    asset = relationship("Asset", back_populates="transactions")

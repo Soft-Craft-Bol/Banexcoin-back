@@ -9,8 +9,13 @@ from app.models.transaction import Transaction
 from app.models.wallet import Wallet
 from app.models.upload import Upload
 from app.models.reconciliation import Reconciliation
+from app.models.asset import Asset
+from app.models.data_source import DataSource
 
-from app.api.routes import auth, users, uploads, reconciliation, wallets, reports, transactions
+from app.api.routes import (
+    auth, users, uploads, reconciliation,
+    wallets, reports, transactions, data_sources, assets
+)
 
 Base.metadata.create_all(bind=engine)
 
@@ -29,8 +34,11 @@ app.include_router(users.router)
 app.include_router(uploads.router)
 app.include_router(reconciliation.router)
 app.include_router(transactions.router)
+app.include_router(data_sources.router)
+app.include_router(assets.router)
 app.include_router(wallets.router)
 app.include_router(reports.router)
+
 
 @app.get("/")
 def root():

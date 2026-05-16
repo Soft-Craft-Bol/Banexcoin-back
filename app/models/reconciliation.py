@@ -1,6 +1,7 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime
+from sqlalchemy import Column, Integer, String, Float, DateTime, Date, ForeignKey
 from datetime import datetime
 from app.core.database import Base
+
 
 class Reconciliation(Base):
     __tablename__ = "reconciliations"
@@ -19,3 +20,28 @@ class Reconciliation(Base):
     details = Column(String, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    # ===== EPICA 5 =====
+
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
+
+    period_type = Column(String, nullable=True)
+
+    data_source_id = Column(
+        Integer,
+        ForeignKey("data_sources.id"),
+        nullable=True
+    )
+
+    asset_id = Column(
+        Integer,
+        ForeignKey("assets.id"),
+        nullable=True
+    )
+
+    initial_balance = Column(Float, nullable=True)
+
+    reported_final_balance = Column(Float, nullable=True)
+
+    expected_balance = Column(Float, nullable=True)
