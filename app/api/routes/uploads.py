@@ -7,9 +7,14 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.upload import Upload
+from app.repositories.transaction_repository import create_transaction
 from app.repositories.upload_repository import create_upload, get_uploads, update_upload_status
 from app.schemas.upload import UploadResponse
-from app.services.excel_service import SUPPORTED_EXTENSIONS, read_financial_file
+from app.services.excel_service import (
+    SUPPORTED_EXTENSIONS,
+    dataframe_to_transactions,
+    read_financial_file,
+)
 
 
 
@@ -47,12 +52,20 @@ async def upload_file(
     })
 
     try:
-        valid_sheets, sheet_errors = read_financial_file(file_path)
+        valid_sheets, sheet_errors = read_financial_file(file_path, default_source=source)
 
         if not valid_sheets:
             raise ValueError(f"No se pudo procesar ninguna hoja. Errores: {sheet_errors}")
 
-        total_rows = sum(len(df) for df in valid_sheets.values())
+        transactions = dataframe_to_transactions(valid_sheets, default_source=source)
+
+        if not transactions:
+            raise ValueError("El archivo no contiene transacciones válidas para guardar")
+
+        for transaction in transactions:
+            create_transaction(db, transaction)
+
+        total_rows = len(transactions)
 
         return update_upload_status(
             db=db,
