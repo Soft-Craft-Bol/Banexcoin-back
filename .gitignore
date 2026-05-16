@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Env
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Database
+*.db
+
+# Uploads
+app/uploads/*
+
+# Logs
+*.log
+
+# Docker
+postgres_data/
+
+# OS
+.DS_Store
+Thumbs.db

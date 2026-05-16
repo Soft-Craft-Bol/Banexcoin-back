@@ -1,0 +1,17 @@
+python-jose
+alembic
+email-validator
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+python-dotenv
+pydantic
+pydantic-settings
+python-multipart
+pandas
+openpyxl
+passlib[bcrypt]
+bcrypt==4.0.1
+python-jose[cryptography]
+web3
