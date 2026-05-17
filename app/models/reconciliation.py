@@ -1,21 +1,26 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime
+from sqlalchemy import Column, Integer, String, DateTime, Numeric, ForeignKey
 from datetime import datetime
 from app.core.database import Base
+
 
 class Reconciliation(Base):
     __tablename__ = "reconciliations"
 
     id = Column(Integer, primary_key=True, index=True)
-    wallet_id = Column(Integer, nullable=True)
 
-    source_a = Column(String, nullable=False)
-    source_b = Column(String, nullable=False)
+    upload_id = Column(Integer, ForeignKey("uploads.id"), nullable=False)
 
-    total_a = Column(Float, default=0)
-    total_b = Column(Float, default=0)
-    difference = Column(Float, default=0)
+    operation_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
+    bank_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
 
-    status = Column(String, default="pending")
-    details = Column(String, nullable=True)
+    reconciliation_type = Column(String, nullable=False)
+    reference = Column(String, nullable=True)
+
+    operation_amount = Column(Numeric(18, 2), nullable=True)
+    bank_amount = Column(Numeric(18, 2), nullable=True)
+    difference = Column(Numeric(18, 2), nullable=True)
+
+    status = Column(String, nullable=False)
+    message = Column(String, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
