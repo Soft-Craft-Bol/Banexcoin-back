@@ -1,8 +1,9 @@
 import os
+import tempfile
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -12,11 +13,9 @@ from app.repositories.transaction_repository import bulk_create_transactions, de
 from app.schemas.upload import UploadResponse
 from app.services.excel_service import SUPPORTED_EXTENSIONS, read_financial_file
 from app.services.normalization_service import normalize_workbook
-
+from app.services.cloudinary_service import upload_raw_file
 
 router = APIRouter(prefix="/uploads", tags=["Uploads"])
-
-UPLOAD_DIR = "app/uploads"
 
 
 @router.post("/", response_model=UploadResponse)
@@ -29,15 +28,15 @@ async def upload_file(
     file_extension = os.path.splitext(original_filename)[1].lower()
 
     if file_extension not in SUPPORTED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Solo se permiten archivos CSV o Excel")
-
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
+        raise HTTPException(
+            status_code=400,
+            detail="Solo se permiten archivos CSV o Excel"
+        )
 
     stored_filename = f"{uuid4().hex}{file_extension}"
-    file_path = os.path.join(UPLOAD_DIR, stored_filename)
+    public_id = os.path.splitext(stored_filename)[0]
 
-    with open(file_path, "wb") as buffer:
-        buffer.write(await file.read())
+    temp_file_path = None
 
     upload = create_upload(db, {
         "filename": original_filename,
@@ -45,11 +44,17 @@ async def upload_file(
         "file_type": file_extension.replace(".", ""),
         "source": source,
         "status": "pending",
-        "rows_count": 0
+        "rows_count": 0,
+        "cloudinary_url": None,
+        "cloudinary_public_id": None,
     })
 
     try:
-        valid_sheets, sheet_errors = read_financial_file(file_path)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
+            temp_file.write(await file.read())
+            temp_file_path = temp_file.name
+
+        valid_sheets, sheet_errors = read_financial_file(temp_file_path)
 
         if not valid_sheets:
             raise ValueError(f"No se pudo procesar ninguna hoja. Errores: {sheet_errors}")
@@ -60,7 +65,17 @@ async def upload_file(
         )
 
         if not normalized_transactions:
-            raise ValueError("El archivo fue leído, pero no se generaron movimientos normalizados")
+            raise ValueError(
+                "El archivo fue leído, pero no se generaron movimientos normalizados"
+            )
+
+        cloudinary_file = upload_raw_file(
+            file_path=temp_file_path,
+            public_id=public_id
+        )
+
+        upload.cloudinary_url = cloudinary_file["url"]
+        upload.cloudinary_public_id = cloudinary_file["public_id"]
 
         delete_transactions_by_upload(db, upload.id)
         bulk_create_transactions(db, normalized_transactions)
@@ -86,6 +101,10 @@ async def upload_file(
 
         raise HTTPException(status_code=400, detail=str(exc))
 
+    finally:
+        if temp_file_path and os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+
 
 @router.get("/", response_model=list[UploadResponse])
 def list_uploaded_files(db: Session = Depends(get_db)):
@@ -102,13 +121,7 @@ def download_uploaded_file(
     if not upload:
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
 
-    file_path = os.path.join(UPLOAD_DIR, upload.stored_filename)
+    if not upload.cloudinary_url:
+        raise HTTPException(status_code=404, detail="Archivo no disponible en Cloudinary")
 
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Archivo físico no encontrado")
-
-    return FileResponse(
-        path=file_path,
-        filename=upload.filename,
-        media_type="application/octet-stream"
-    )
+    return RedirectResponse(upload.cloudinary_url)
