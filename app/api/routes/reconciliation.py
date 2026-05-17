@@ -3,6 +3,8 @@ from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, or_
 from app.models.reconciliation import Reconciliation
 from app.models.transaction import Transaction
+from math import ceil
+from fastapi import Query
 
 from app.core.database import get_db
 from app.models.upload import Upload
@@ -61,17 +63,17 @@ def run_upload_reconciliation(
 def list_reconciliations(
     upload_id: int | None = None,
     status: str | None = None,
-    db: Session = Depends(get_db)
+    page: int = Query(0, ge=0),
+    size: int = Query(20, ge=1, le=500),
+    db: Session = Depends(get_db),
 ):
-    records = get_reconciliations(db, upload_id)
-
-    if status:
-        records = [
-            item for item in records
-            if item.status == status
-        ]
-
-    return records
+    return get_reconciliations(
+        db=db,
+        upload_id=upload_id,
+        status=status,
+        page=page,
+        size=size,
+    )
 
 @router.get("/summary/by-type")
 def reconciliation_summary_by_type(
