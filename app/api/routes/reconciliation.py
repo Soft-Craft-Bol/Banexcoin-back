@@ -459,3 +459,152 @@ def reconciliation_errors_by_client(
         "last": page >= total_pages - 1 if total_pages > 0 else True,
         "empty": len(content) == 0
     }
+
+@router.get("/dashboard/stats")
+def reconciliation_dashboard_stats(
+    upload_id: int | None = None,
+    db: Session = Depends(get_db)
+):
+    OperationTx = aliased(Transaction)
+    BankTx = aliased(Transaction)
+
+    upload_query = db.query(Upload)
+
+    if upload_id:
+        upload_query = upload_query.filter(Upload.id == upload_id)
+
+    total_files = upload_query.count()
+
+    processed_files = (
+        upload_query
+        .filter(Upload.status == "processed")
+        .count()
+    )
+
+    pending_files = (
+        upload_query
+        .filter(Upload.status.in_(["pending", "uploaded", "processing"]))
+        .count()
+    )
+
+    error_files = (
+        upload_query
+        .filter(Upload.status == "error")
+        .count()
+    )
+
+    total_movements_query = db.query(Transaction)
+
+    if upload_id:
+        total_movements_query = total_movements_query.filter(
+            Transaction.upload_id == upload_id
+        )
+
+    total_movements = total_movements_query.count()
+
+    total_clients = (
+        total_movements_query
+        .filter(Transaction.client.isnot(None))
+        .with_entities(func.count(func.distinct(Transaction.client)))
+        .scalar()
+        or 0
+    )
+
+    reconciliation_query = db.query(Reconciliation)
+
+    if upload_id:
+        reconciliation_query = reconciliation_query.filter(
+            Reconciliation.upload_id == upload_id
+        )
+
+    total_reconciliations = reconciliation_query.count()
+
+    total_errors = (
+        reconciliation_query
+        .filter(Reconciliation.status != "MATCHED")
+        .count()
+    )
+
+    matched_total = (
+        reconciliation_query
+        .filter(Reconciliation.status == "MATCHED")
+        .count()
+    )
+
+    client_expr = func.coalesce(
+        OperationTx.client,
+        BankTx.client,
+        "SIN_CLIENTE"
+    )
+
+    clients_with_errors = (
+        db.query(func.count(func.distinct(client_expr)))
+        .select_from(Reconciliation)
+        .outerjoin(
+            OperationTx,
+            Reconciliation.operation_transaction_id == OperationTx.id
+        )
+        .outerjoin(
+            BankTx,
+            Reconciliation.bank_transaction_id == BankTx.id
+        )
+        .filter(Reconciliation.status != "MATCHED")
+    )
+
+    if upload_id:
+        clients_with_errors = clients_with_errors.filter(
+            Reconciliation.upload_id == upload_id
+        )
+
+    clients_with_errors_count = clients_with_errors.scalar() or 0
+
+    clients_without_errors_count = max(
+        total_clients - clients_with_errors_count,
+        0
+    )
+
+    status_rows = (
+        reconciliation_query
+        .with_entities(
+            Reconciliation.status,
+            func.count(Reconciliation.id).label("total")
+        )
+        .group_by(Reconciliation.status)
+        .all()
+    )
+
+    status_summary = [
+        {
+            "status": row.status,
+            "total": row.total
+        }
+        for row in status_rows
+    ]
+
+    return {
+        "upload_id": upload_id,
+        "files": {
+            "total": total_files,
+            "processed": processed_files,
+            "pending": pending_files,
+            "errors": error_files
+        },
+        "clients": {
+            "total": total_clients,
+            "with_errors": clients_with_errors_count,
+            "without_errors": clients_without_errors_count
+        },
+        "reconciliation": {
+            "total": total_reconciliations,
+            "matched": matched_total,
+            "errors": total_errors,
+            "success_percentage": round(
+                (matched_total / total_reconciliations) * 100,
+                2
+            ) if total_reconciliations > 0 else 0
+        },
+        "movements": {
+            "total": total_movements
+        },
+        "status_summary": status_summary
+    }
