@@ -1,7 +1,9 @@
 from math import ceil
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from app.models.reconciliation import Reconciliation
+from app.models.transaction import Transaction
+from sqlalchemy import func
 
 
 def delete_reconciliations_by_upload(db: Session, upload_id: int):
@@ -30,7 +32,29 @@ def get_reconciliations(
     page: int = 0,
     size: int = 20,
 ):
-    query = db.query(Reconciliation)
+    OperationTx = aliased(Transaction)
+    BankTx = aliased(Transaction)
+
+    client_expr = func.coalesce(
+        OperationTx.client,
+        BankTx.client,
+        "SIN_CLIENTE"
+    )
+
+    query = (
+        db.query(
+            Reconciliation,
+            client_expr.label("client")
+        )
+        .outerjoin(
+            OperationTx,
+            Reconciliation.operation_transaction_id == OperationTx.id
+        )
+        .outerjoin(
+            BankTx,
+            Reconciliation.bank_transaction_id == BankTx.id
+        )
+    )
 
     if upload_id is not None:
         query = query.filter(Reconciliation.upload_id == upload_id)
@@ -42,7 +66,7 @@ def get_reconciliations(
     total_pages = ceil(total_elements / size) if total_elements else 0
     offset = page * size
 
-    records = (
+    rows = (
         query
         .order_by(Reconciliation.created_at.desc(), Reconciliation.id.desc())
         .offset(offset)
@@ -50,10 +74,29 @@ def get_reconciliations(
         .all()
     )
 
-    number_of_elements = len(records)
+    content = [
+        {
+            "id": reconciliation.id,
+            "upload_id": reconciliation.upload_id,
+            "client": client,
+            "reconciliation_type": reconciliation.reconciliation_type,
+            "reference": reconciliation.reference,
+            "operation_amount": reconciliation.operation_amount,
+            "bank_amount": reconciliation.bank_amount,
+            "difference": reconciliation.difference,
+            "status": reconciliation.status,
+            "message": reconciliation.message,
+            "operation_transaction_id": reconciliation.operation_transaction_id,
+            "bank_transaction_id": reconciliation.bank_transaction_id,
+            "created_at": reconciliation.created_at,
+        }
+        for reconciliation, client in rows
+    ]
+
+    number_of_elements = len(content)
 
     return {
-        "content": records,
+        "content": content,
         "pageable": {
             "pageNumber": page,
             "pageSize": size,

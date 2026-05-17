@@ -187,17 +187,24 @@ def reconciliation_summary_by_client(
         "empty": len(content) == 0
     }
 
+from math import ceil
+from fastapi import Query
+from sqlalchemy.orm import aliased
+from sqlalchemy import or_
+
 @router.get("/client/{client_name}/details")
 def reconciliation_client_details(
     client_name: str,
     upload_id: int,
     status: str | None = None,
+    page: int = Query(0, ge=0),
+    size: int = Query(20, ge=1, le=500),
     db: Session = Depends(get_db)
 ):
     OperationTx = aliased(Transaction)
     BankTx = aliased(Transaction)
 
-    query = (
+    base_query = (
         db.query(
             Reconciliation,
             OperationTx,
@@ -221,11 +228,21 @@ def reconciliation_client_details(
     )
 
     if status:
-        query = query.filter(Reconciliation.status == status)
+        base_query = base_query.filter(Reconciliation.status == status)
 
-    rows = query.order_by(Reconciliation.created_at.desc()).all()
+    total_elements = base_query.order_by(None).count()
+    total_pages = ceil(total_elements / size) if total_elements > 0 else 0
+    offset = page * size
 
-    return [
+    rows = (
+        base_query
+        .order_by(Reconciliation.created_at.desc())
+        .offset(offset)
+        .limit(size)
+        .all()
+    )
+
+    content = [
         {
             "reconciliation": {
                 "id": reconciliation.id,
@@ -269,6 +286,30 @@ def reconciliation_client_details(
         }
         for reconciliation, operation_tx, bank_tx in rows
     ]
+
+    return {
+        "content": content,
+        "pageable": {
+            "pageNumber": page,
+            "pageSize": size,
+            "offset": offset,
+            "paged": True,
+            "unpaged": False,
+        },
+        "totalElements": total_elements,
+        "totalPages": total_pages,
+        "last": page >= total_pages - 1 if total_pages > 0 else True,
+        "first": page == 0,
+        "size": size,
+        "number": page,
+        "numberOfElements": len(content),
+        "empty": len(content) == 0,
+        "sort": {
+            "sorted": True,
+            "unsorted": False,
+            "empty": False,
+        },
+    }
 
 
 @router.get("/errors")
