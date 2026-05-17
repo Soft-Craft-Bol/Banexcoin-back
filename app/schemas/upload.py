@@ -10,6 +10,8 @@ class UploadResponse(BaseModel):
     status: str
     rows_count: int
     error_message: str | None = None
+    cloudinary_url: str | None = None
+    cloudinary_public_id: str | None = None
     created_at: datetime
 
     class Config:

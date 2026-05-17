@@ -13,4 +13,8 @@ class Upload(Base):
     status = Column(String, nullable=False, default="pending")
     rows_count = Column(Integer, default=0)
     error_message = Column(String, nullable=True)
+
+    cloudinary_url = Column(String, nullable=True)
+    cloudinary_public_id = Column(String, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
