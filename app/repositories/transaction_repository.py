@@ -1,17 +1,19 @@
 from sqlalchemy.orm import Session
 from app.models.transaction import Transaction
 
-def create_transaction(db: Session, data: dict):
-    transaction = Transaction(**data)
-    db.add(transaction)
+
+def bulk_create_transactions(db: Session, transactions: list[dict]):
+    if not transactions:
+        return []
+
+    db_transactions = [Transaction(**item) for item in transactions]
+
+    db.add_all(db_transactions)
     db.commit()
-    db.refresh(transaction)
-    return transaction
 
-def get_transactions(db: Session):
-    return db.query(Transaction).all()
+    return db_transactions
 
-def get_transactions_by_source(db: Session, source: str):
-    return db.query(Transaction).filter(
-        Transaction.source == source
-    ).all()
+
+def delete_transactions_by_upload(db: Session, upload_id: int):
+    db.query(Transaction).filter(Transaction.upload_id == upload_id).delete()
+    db.commit()

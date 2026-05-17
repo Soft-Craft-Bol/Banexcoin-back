@@ -1,19 +1,26 @@
 from pydantic import BaseModel
+from datetime import datetime
+from decimal import Decimal
 
-class ReconciliationCreate(BaseModel):
-    wallet_id: int
-    token: str = "usdt"
 
 class ReconciliationResponse(BaseModel):
     id: int
-    wallet_id: int | None
-    source_a: str
-    source_b: str
-    total_a: float
-    total_b: float
-    difference: float
+    upload_id: int
+
+    operation_transaction_id: int | None
+    bank_transaction_id: int | None
+
+    reconciliation_type: str
+    reference: str | None
+
+    operation_amount: Decimal | None
+    bank_amount: Decimal | None
+    difference: Decimal | None
+
     status: str
-    details: str | None
+    message: str | None
+
+    created_at: datetime
 
     class Config:
         from_attributes = True
