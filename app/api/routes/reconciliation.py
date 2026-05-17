@@ -106,17 +106,30 @@ def reconciliation_summary_by_type(
         for row in rows
     ]
 
+from math import ceil
+from fastapi import Query
+from sqlalchemy.orm import aliased
+from sqlalchemy import func
+
 @router.get("/summary/by-client")
 def reconciliation_summary_by_client(
     upload_id: int,
+    page: int = Query(0, ge=0),
+    size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
     OperationTx = aliased(Transaction)
     BankTx = aliased(Transaction)
 
-    rows = (
+    client_expr = func.coalesce(
+        OperationTx.client,
+        BankTx.client,
+        "SIN_CLIENTE"
+    )
+
+    base_query = (
         db.query(
-            func.coalesce(OperationTx.client, BankTx.client, "SIN_CLIENTE").label("client"),
+            client_expr.label("client"),
             Reconciliation.reconciliation_type,
             Reconciliation.status,
             func.count(Reconciliation.id).label("total")
@@ -131,19 +144,28 @@ def reconciliation_summary_by_client(
         )
         .filter(Reconciliation.upload_id == upload_id)
         .group_by(
-            func.coalesce(OperationTx.client, BankTx.client, "SIN_CLIENTE"),
+            client_expr,
             Reconciliation.reconciliation_type,
             Reconciliation.status
         )
+    )
+
+    total_elements = base_query.count()
+    total_pages = ceil(total_elements / size) if total_elements > 0 else 0
+
+    rows = (
+        base_query
         .order_by(
-            func.coalesce(OperationTx.client, BankTx.client, "SIN_CLIENTE"),
+            client_expr,
             Reconciliation.reconciliation_type,
             Reconciliation.status
         )
+        .offset(page * size)
+        .limit(size)
         .all()
     )
 
-    return [
+    content = [
         {
             "client": row.client,
             "reconciliation_type": row.reconciliation_type,
@@ -152,6 +174,18 @@ def reconciliation_summary_by_client(
         }
         for row in rows
     ]
+
+    return {
+        "content": content,
+        "page": page,
+        "size": size,
+        "totalElements": total_elements,
+        "totalPages": total_pages,
+        "numberOfElements": len(content),
+        "first": page == 0,
+        "last": page >= total_pages - 1 if total_pages > 0 else True,
+        "empty": len(content) == 0
+    }
 
 @router.get("/client/{client_name}/details")
 def reconciliation_client_details(
@@ -359,14 +393,22 @@ def serialize_transaction(tx: Transaction, include_raw_data: bool):
 @router.get("/errors/by-client")
 def reconciliation_errors_by_client(
     upload_id: int,
+    page: int = Query(0, ge=0),
+    size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
     OperationTx = aliased(Transaction)
     BankTx = aliased(Transaction)
 
-    rows = (
+    client_expr = func.coalesce(
+        OperationTx.client,
+        BankTx.client,
+        "SIN_CLIENTE"
+    )
+
+    base_query = (
         db.query(
-            func.coalesce(OperationTx.client, BankTx.client, "SIN_CLIENTE").label("client"),
+            client_expr.label("client"),
             Reconciliation.status,
             func.count(Reconciliation.id).label("total")
         )
@@ -381,14 +423,23 @@ def reconciliation_errors_by_client(
         .filter(Reconciliation.upload_id == upload_id)
         .filter(Reconciliation.status != "MATCHED")
         .group_by(
-            func.coalesce(OperationTx.client, BankTx.client, "SIN_CLIENTE"),
+            client_expr,
             Reconciliation.status
         )
+    )
+
+    total_elements = base_query.count()
+    total_pages = ceil(total_elements / size) if total_elements > 0 else 0
+
+    rows = (
+        base_query
         .order_by(func.count(Reconciliation.id).desc())
+        .offset(page * size)
+        .limit(size)
         .all()
     )
 
-    return [
+    content = [
         {
             "client": row.client,
             "status": row.status,
@@ -396,3 +447,15 @@ def reconciliation_errors_by_client(
         }
         for row in rows
     ]
+
+    return {
+        "content": content,
+        "page": page,
+        "size": size,
+        "totalElements": total_elements,
+        "totalPages": total_pages,
+        "numberOfElements": len(content),
+        "first": page == 0,
+        "last": page >= total_pages - 1 if total_pages > 0 else True,
+        "empty": len(content) == 0
+    }
