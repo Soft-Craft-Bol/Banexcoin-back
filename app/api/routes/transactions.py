@@ -1,16 +1,25 @@
-from fastapi import APIRouter, Depends
+from math import ceil
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+
 from app.core.database import get_db
 from app.models.transaction import Transaction
 
 router = APIRouter(prefix="/transactions", tags=["Transactions"])
+
 
 @router.get("/")
 def list_transactions(
     upload_id: int | None = None,
     service_type: str | None = None,
     source_type: str | None = None,
+
+    # PAGINACION
+    page: int = Query(0, ge=0),
+    size: int = Query(20, ge=1, le=200),
+
     db: Session = Depends(get_db)
 ):
     query = db.query(Transaction)
@@ -24,9 +33,33 @@ def list_transactions(
     if source_type:
         query = query.filter(Transaction.source_type == source_type)
 
-    transactions = query.order_by(Transaction.date.desc()).limit(500).all()
+    total_elements = query.count()
 
-    return transactions
+    total_pages = (
+        ceil(total_elements / size)
+        if total_elements > 0
+        else 0
+    )
+
+    transactions = (
+        query
+        .order_by(Transaction.date.desc())
+        .offset(page * size)
+        .limit(size)
+        .all()
+    )
+
+    return {
+        "content": transactions,
+        "page": page,
+        "size": size,
+        "totalElements": total_elements,
+        "totalPages": total_pages,
+        "numberOfElements": len(transactions),
+        "first": page == 0,
+        "last": page >= total_pages - 1 if total_pages > 0 else True,
+        "empty": len(transactions) == 0
+    }
 
 @router.get("/summary/by-service")
 def summary_by_service(

@@ -1,12 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, or_
+from app.models.reconciliation import Reconciliation
+from app.models.transaction import Transaction
 from math import ceil
+from fastapi import Query
 
 from app.core.database import get_db
 from app.models.upload import Upload
-from app.models.reconciliation import Reconciliation
-from app.models.transaction import Transaction
 from app.repositories.reconciliation_repository import (
     bulk_create_reconciliations,
     delete_reconciliations_by_upload,
@@ -16,71 +17,6 @@ from app.services.reconciliation_service import run_reconciliation
 
 
 router = APIRouter(prefix="/reconciliation", tags=["Reconciliation"])
-
-
-def build_paginated_response(
-    content: list,
-    page: int,
-    size: int,
-    total_elements: int,
-    offset: int,
-    sorted_value: bool = True,
-):
-    total_pages = ceil(total_elements / size) if total_elements else 0
-
-    return {
-        "content": content,
-        "pageable": {
-            "pageNumber": page,
-            "pageSize": size,
-            "offset": offset,
-            "paged": True,
-            "unpaged": False,
-        },
-        "totalElements": total_elements,
-        "totalPages": total_pages,
-        "last": page >= total_pages - 1 if total_pages > 0 else True,
-        "first": page == 0,
-        "size": size,
-        "number": page,
-        "numberOfElements": len(content),
-        "empty": len(content) == 0,
-        "sort": {
-            "sorted": sorted_value,
-            "unsorted": not sorted_value,
-            "empty": False,
-        },
-    }
-
-
-def paginate_query(query, page: int, size: int):
-    total_elements = query.order_by(None).count()
-    offset = page * size
-
-    rows = query.offset(offset).limit(size).all()
-
-    return rows, total_elements, offset
-
-
-def serialize_transaction(tx: Transaction, include_raw_data: bool = False):
-    data = {
-        "id": tx.id,
-        "service_type": tx.service_type,
-        "client": tx.client,
-        "date": tx.date,
-        "asset": tx.asset,
-        "amount": tx.amount,
-        "fiat_currency": tx.fiat_currency,
-        "fiat_amount": tx.fiat_amount,
-        "direction": tx.direction,
-        "reference": tx.reference,
-        "status": tx.status,
-    }
-
-    if include_raw_data:
-        data["raw_data"] = tx.raw_data
-
-    return data
 
 
 @router.post("/run/{upload_id}")
@@ -116,21 +52,11 @@ def run_upload_reconciliation(
         "differences": differences,
         "summary": {
             "matched": matched,
-            "amount_difference": len([
-                item for item in results
-                if item["status"] == "AMOUNT_DIFFERENCE"
-            ]),
-            "missing_in_bank": len([
-                item for item in results
-                if item["status"] == "MISSING_IN_BANK"
-            ]),
-            "missing_in_operation": len([
-                item for item in results
-                if item["status"] == "MISSING_IN_OPERATION"
-            ]),
+            "amount_difference": len([item for item in results if item["status"] == "AMOUNT_DIFFERENCE"]),
+            "missing_in_bank": len([item for item in results if item["status"] == "MISSING_IN_BANK"]),
+            "missing_in_operation": len([item for item in results if item["status"] == "MISSING_IN_OPERATION"]),
         }
     }
-
 
 @router.get("/")
 def list_reconciliations(
@@ -148,15 +74,12 @@ def list_reconciliations(
         size=size,
     )
 
-
 @router.get("/summary/by-type")
 def reconciliation_summary_by_type(
     upload_id: int,
-    page: int = Query(0, ge=0),
-    size: int = Query(20, ge=1, le=500),
     db: Session = Depends(get_db)
 ):
-    query = (
+    rows = (
         db.query(
             Reconciliation.reconciliation_type,
             Reconciliation.status,
@@ -171,11 +94,10 @@ def reconciliation_summary_by_type(
             Reconciliation.reconciliation_type,
             Reconciliation.status
         )
+        .all()
     )
 
-    rows, total_elements, offset = paginate_query(query, page, size)
-
-    content = [
+    return [
         {
             "reconciliation_type": row.reconciliation_type,
             "status": row.status,
@@ -184,20 +106,16 @@ def reconciliation_summary_by_type(
         for row in rows
     ]
 
-    return build_paginated_response(
-        content=content,
-        page=page,
-        size=size,
-        total_elements=total_elements,
-        offset=offset,
-    )
-
+from math import ceil
+from fastapi import Query
+from sqlalchemy.orm import aliased
+from sqlalchemy import func
 
 @router.get("/summary/by-client")
 def reconciliation_summary_by_client(
     upload_id: int,
     page: int = Query(0, ge=0),
-    size: int = Query(20, ge=1, le=500),
+    size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
     OperationTx = aliased(Transaction)
@@ -209,7 +127,7 @@ def reconciliation_summary_by_client(
         "SIN_CLIENTE"
     )
 
-    query = (
+    base_query = (
         db.query(
             client_expr.label("client"),
             Reconciliation.reconciliation_type,
@@ -230,14 +148,22 @@ def reconciliation_summary_by_client(
             Reconciliation.reconciliation_type,
             Reconciliation.status
         )
+    )
+
+    total_elements = base_query.count()
+    total_pages = ceil(total_elements / size) if total_elements > 0 else 0
+
+    rows = (
+        base_query
         .order_by(
             client_expr,
             Reconciliation.reconciliation_type,
             Reconciliation.status
         )
+        .offset(page * size)
+        .limit(size)
+        .all()
     )
-
-    rows, total_elements, offset = paginate_query(query, page, size)
 
     content = [
         {
@@ -249,23 +175,23 @@ def reconciliation_summary_by_client(
         for row in rows
     ]
 
-    return build_paginated_response(
-        content=content,
-        page=page,
-        size=size,
-        total_elements=total_elements,
-        offset=offset,
-    )
-
+    return {
+        "content": content,
+        "page": page,
+        "size": size,
+        "totalElements": total_elements,
+        "totalPages": total_pages,
+        "numberOfElements": len(content),
+        "first": page == 0,
+        "last": page >= total_pages - 1 if total_pages > 0 else True,
+        "empty": len(content) == 0
+    }
 
 @router.get("/client/{client_name}/details")
 def reconciliation_client_details(
     client_name: str,
     upload_id: int,
     status: str | None = None,
-    page: int = Query(0, ge=0),
-    size: int = Query(20, ge=1, le=500),
-    include_raw_data: bool = False,
     db: Session = Depends(get_db)
 ):
     OperationTx = aliased(Transaction)
@@ -292,15 +218,14 @@ def reconciliation_client_details(
                 BankTx.client == client_name
             )
         )
-        .order_by(Reconciliation.created_at.desc())
     )
 
     if status:
         query = query.filter(Reconciliation.status == status)
 
-    rows, total_elements, offset = paginate_query(query, page, size)
+    rows = query.order_by(Reconciliation.created_at.desc()).all()
 
-    content = [
+    return [
         {
             "reconciliation": {
                 "id": reconciliation.id,
@@ -313,25 +238,37 @@ def reconciliation_client_details(
                 "message": reconciliation.message,
                 "created_at": reconciliation.created_at,
             },
-            "operation_transaction": serialize_transaction(
-                operation_tx,
-                include_raw_data
-            ) if operation_tx else None,
-            "bank_transaction": serialize_transaction(
-                bank_tx,
-                include_raw_data
-            ) if bank_tx else None,
+            "operation_transaction": {
+                "id": operation_tx.id,
+                "service_type": operation_tx.service_type,
+                "client": operation_tx.client,
+                "date": operation_tx.date,
+                "asset": operation_tx.asset,
+                "amount": operation_tx.amount,
+                "fiat_currency": operation_tx.fiat_currency,
+                "fiat_amount": operation_tx.fiat_amount,
+                "direction": operation_tx.direction,
+                "reference": operation_tx.reference,
+                "status": operation_tx.status,
+                "raw_data": operation_tx.raw_data,
+            } if operation_tx else None,
+            "bank_transaction": {
+                "id": bank_tx.id,
+                "service_type": bank_tx.service_type,
+                "client": bank_tx.client,
+                "date": bank_tx.date,
+                "asset": bank_tx.asset,
+                "amount": bank_tx.amount,
+                "fiat_currency": bank_tx.fiat_currency,
+                "fiat_amount": bank_tx.fiat_amount,
+                "direction": bank_tx.direction,
+                "reference": bank_tx.reference,
+                "status": bank_tx.status,
+                "raw_data": bank_tx.raw_data,
+            } if bank_tx else None,
         }
         for reconciliation, operation_tx, bank_tx in rows
     ]
-
-    return build_paginated_response(
-        content=content,
-        page=page,
-        size=size,
-        total_elements=total_elements,
-        offset=offset,
-    )
 
 
 @router.get("/errors")
@@ -374,23 +311,28 @@ def reconciliation_errors(
             Reconciliation.bank_transaction_id == BankTx.id,
         )
         .filter(*filters)
+    )
+
+    total_elements = base_query.order_by(None).count()
+    total_pages = ceil(total_elements / size) if total_elements else 0
+    offset = page * size
+
+    rows = (
+        base_query
         .order_by(
             Reconciliation.status,
             Reconciliation.reconciliation_type,
             Reconciliation.reference,
             Reconciliation.id,
         )
+        .offset(offset)
+        .limit(size)
+        .all()
     )
-
-    rows, total_elements, offset = paginate_query(base_query, page, size)
 
     content = [
         {
-            "client": operation_tx.client
-            if operation_tx
-            else bank_tx.client
-            if bank_tx
-            else None,
+            "client": operation_tx.client if operation_tx else bank_tx.client if bank_tx else None,
             "reconciliation_id": reconciliation.id,
             "reconciliation_type": reconciliation.reconciliation_type,
             "status": reconciliation.status,
@@ -399,32 +341,60 @@ def reconciliation_errors(
             "bank_amount": reconciliation.bank_amount,
             "difference": reconciliation.difference,
             "message": reconciliation.message,
-            "operation_transaction": serialize_transaction(
-                operation_tx,
-                include_raw_data
-            ) if operation_tx else None,
-            "bank_transaction": serialize_transaction(
-                bank_tx,
-                include_raw_data
-            ) if bank_tx else None,
+            "operation_transaction": serialize_transaction(operation_tx, include_raw_data)
+            if operation_tx else None,
+            "bank_transaction": serialize_transaction(bank_tx, include_raw_data)
+            if bank_tx else None,
         }
         for reconciliation, operation_tx, bank_tx in rows
     ]
 
-    return build_paginated_response(
-        content=content,
-        page=page,
-        size=size,
-        total_elements=total_elements,
-        offset=offset,
-    )
+    return {
+        "content": content,
+        "pageable": {
+            "pageNumber": page,
+            "pageSize": size,
+            "offset": offset,
+            "paged": True,
+            "unpaged": False,
+        },
+        "totalElements": total_elements,
+        "totalPages": total_pages,
+        "last": page >= total_pages - 1 if total_pages > 0 else True,
+        "first": page == 0,
+        "size": size,
+        "number": page,
+        "numberOfElements": len(content),
+        "empty": len(content) == 0,
+        "sort": {
+            "sorted": True,
+            "unsorted": False,
+            "empty": False,
+        },
+    }
 
+
+def serialize_transaction(tx: Transaction, include_raw_data: bool):
+    data = {
+        "id": tx.id,
+        "service_type": tx.service_type,
+        "client": tx.client,
+        "date": tx.date,
+        "amount": tx.amount,
+        "fiat_amount": tx.fiat_amount,
+        "reference": tx.reference,
+    }
+
+    if include_raw_data:
+        data["raw_data"] = tx.raw_data
+
+    return data
 
 @router.get("/errors/by-client")
 def reconciliation_errors_by_client(
     upload_id: int,
     page: int = Query(0, ge=0),
-    size: int = Query(20, ge=1, le=500),
+    size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
     OperationTx = aliased(Transaction)
@@ -436,7 +406,7 @@ def reconciliation_errors_by_client(
         "SIN_CLIENTE"
     )
 
-    query = (
+    base_query = (
         db.query(
             client_expr.label("client"),
             Reconciliation.status,
@@ -456,10 +426,18 @@ def reconciliation_errors_by_client(
             client_expr,
             Reconciliation.status
         )
-        .order_by(func.count(Reconciliation.id).desc())
     )
 
-    rows, total_elements, offset = paginate_query(query, page, size)
+    total_elements = base_query.count()
+    total_pages = ceil(total_elements / size) if total_elements > 0 else 0
+
+    rows = (
+        base_query
+        .order_by(func.count(Reconciliation.id).desc())
+        .offset(page * size)
+        .limit(size)
+        .all()
+    )
 
     content = [
         {
@@ -470,10 +448,14 @@ def reconciliation_errors_by_client(
         for row in rows
     ]
 
-    return build_paginated_response(
-        content=content,
-        page=page,
-        size=size,
-        total_elements=total_elements,
-        offset=offset,
-    )
+    return {
+        "content": content,
+        "page": page,
+        "size": size,
+        "totalElements": total_elements,
+        "totalPages": total_pages,
+        "numberOfElements": len(content),
+        "first": page == 0,
+        "last": page >= total_pages - 1 if total_pages > 0 else True,
+        "empty": len(content) == 0
+    }
