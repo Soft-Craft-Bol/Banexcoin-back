@@ -58,7 +58,6 @@ def run_upload_reconciliation(
         }
     }
 
-
 @router.get("/")
 def list_reconciliations(
     upload_id: int | None = None,
@@ -237,52 +236,67 @@ def reconciliation_client_details(
         for reconciliation, operation_tx, bank_tx in rows
     ]
 
+
 @router.get("/errors")
 def reconciliation_errors(
     upload_id: int,
     status: str | None = None,
     client: str | None = None,
-    db: Session = Depends(get_db)
+    page: int = Query(0, ge=0),
+    size: int = Query(20, ge=1, le=500),
+    include_raw_data: bool = False,
+    db: Session = Depends(get_db),
 ):
     OperationTx = aliased(Transaction)
     BankTx = aliased(Transaction)
 
-    query = (
-        db.query(
-            Reconciliation,
-            OperationTx,
-            BankTx
-        )
-        .outerjoin(
-            OperationTx,
-            Reconciliation.operation_transaction_id == OperationTx.id
-        )
-        .outerjoin(
-            BankTx,
-            Reconciliation.bank_transaction_id == BankTx.id
-        )
-        .filter(Reconciliation.upload_id == upload_id)
-        .filter(Reconciliation.status != "MATCHED")
-    )
+    filters = [
+        Reconciliation.upload_id == upload_id,
+        Reconciliation.status != "MATCHED",
+    ]
 
     if status:
-        query = query.filter(Reconciliation.status == status)
+        filters.append(Reconciliation.status == status)
 
     if client:
-        query = query.filter(
+        filters.append(
             or_(
                 OperationTx.client == client,
-                BankTx.client == client
+                BankTx.client == client,
             )
         )
 
-    rows = query.order_by(
-        Reconciliation.status,
-        Reconciliation.reconciliation_type,
-        Reconciliation.reference
-    ).all()
+    base_query = (
+        db.query(Reconciliation, OperationTx, BankTx)
+        .outerjoin(
+            OperationTx,
+            Reconciliation.operation_transaction_id == OperationTx.id,
+        )
+        .outerjoin(
+            BankTx,
+            Reconciliation.bank_transaction_id == BankTx.id,
+        )
+        .filter(*filters)
+    )
 
-    return [
+    total_elements = base_query.order_by(None).count()
+    total_pages = ceil(total_elements / size) if total_elements else 0
+    offset = page * size
+
+    rows = (
+        base_query
+        .order_by(
+            Reconciliation.status,
+            Reconciliation.reconciliation_type,
+            Reconciliation.reference,
+            Reconciliation.id,
+        )
+        .offset(offset)
+        .limit(size)
+        .all()
+    )
+
+    content = [
         {
             "client": operation_tx.client if operation_tx else bank_tx.client if bank_tx else None,
             "reconciliation_id": reconciliation.id,
@@ -293,29 +307,54 @@ def reconciliation_errors(
             "bank_amount": reconciliation.bank_amount,
             "difference": reconciliation.difference,
             "message": reconciliation.message,
-            "operation_transaction": {
-                "id": operation_tx.id,
-                "service_type": operation_tx.service_type,
-                "client": operation_tx.client,
-                "date": operation_tx.date,
-                "amount": operation_tx.amount,
-                "fiat_amount": operation_tx.fiat_amount,
-                "reference": operation_tx.reference,
-                "raw_data": operation_tx.raw_data,
-            } if operation_tx else None,
-            "bank_transaction": {
-                "id": bank_tx.id,
-                "service_type": bank_tx.service_type,
-                "client": bank_tx.client,
-                "date": bank_tx.date,
-                "amount": bank_tx.amount,
-                "fiat_amount": bank_tx.fiat_amount,
-                "reference": bank_tx.reference,
-                "raw_data": bank_tx.raw_data,
-            } if bank_tx else None,
+            "operation_transaction": serialize_transaction(operation_tx, include_raw_data)
+            if operation_tx else None,
+            "bank_transaction": serialize_transaction(bank_tx, include_raw_data)
+            if bank_tx else None,
         }
         for reconciliation, operation_tx, bank_tx in rows
     ]
+
+    return {
+        "content": content,
+        "pageable": {
+            "pageNumber": page,
+            "pageSize": size,
+            "offset": offset,
+            "paged": True,
+            "unpaged": False,
+        },
+        "totalElements": total_elements,
+        "totalPages": total_pages,
+        "last": page >= total_pages - 1 if total_pages > 0 else True,
+        "first": page == 0,
+        "size": size,
+        "number": page,
+        "numberOfElements": len(content),
+        "empty": len(content) == 0,
+        "sort": {
+            "sorted": True,
+            "unsorted": False,
+            "empty": False,
+        },
+    }
+
+
+def serialize_transaction(tx: Transaction, include_raw_data: bool):
+    data = {
+        "id": tx.id,
+        "service_type": tx.service_type,
+        "client": tx.client,
+        "date": tx.date,
+        "amount": tx.amount,
+        "fiat_amount": tx.fiat_amount,
+        "reference": tx.reference,
+    }
+
+    if include_raw_data:
+        data["raw_data"] = tx.raw_data
+
+    return data
 
 @router.get("/errors/by-client")
 def reconciliation_errors_by_client(
