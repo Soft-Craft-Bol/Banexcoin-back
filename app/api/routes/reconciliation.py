@@ -1,67 +1,71 @@
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-
-from app.schemas.reconciliation import ReconciliationResponse
-
-from app.services.reconciliation_service import reconcile_transactions_with_wallet
-
+from app.models.upload import Upload
 from app.repositories.reconciliation_repository import (
+    bulk_create_reconciliations,
+    delete_reconciliations_by_upload,
     get_reconciliations,
-    get_reconciliation_by_id
 )
+from app.services.reconciliation_service import run_reconciliation
+
 
 router = APIRouter(prefix="/reconciliation", tags=["Reconciliation"])
 
 
-@router.post("/wallet/{wallet_id}", response_model=ReconciliationResponse)
-def reconcile_wallet(
-    wallet_id: int,
-    token: str = Query(default="usdt"),
+@router.post("/run/{upload_id}")
+def run_upload_reconciliation(
+    upload_id: int,
     db: Session = Depends(get_db)
 ):
-    try:
-        return reconcile_transactions_with_wallet(
-            db=db,
-            wallet_id=wallet_id,
-            token=token
-        )
+    upload = db.query(Upload).filter(Upload.id == upload_id).first()
 
-    except ValueError as error:
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload no encontrado")
+
+    if upload.status != "processed":
         raise HTTPException(
             status_code=400,
-            detail=str(error)
+            detail="El archivo todavía no fue procesado correctamente"
         )
 
-    except ConnectionError as error:
-        raise HTTPException(
-            status_code=503,
-            detail=str(error)
-        )
+    delete_reconciliations_by_upload(db, upload_id)
+
+    results = run_reconciliation(db, upload_id)
+
+    bulk_create_reconciliations(db, results)
+
+    total = len(results)
+    matched = len([item for item in results if item["status"] == "MATCHED"])
+    differences = len([item for item in results if item["status"] != "MATCHED"])
+
+    return {
+        "upload_id": upload_id,
+        "total_compared": total,
+        "matched": matched,
+        "differences": differences,
+        "summary": {
+            "matched": matched,
+            "amount_difference": len([item for item in results if item["status"] == "AMOUNT_DIFFERENCE"]),
+            "missing_in_bank": len([item for item in results if item["status"] == "MISSING_IN_BANK"]),
+            "missing_in_operation": len([item for item in results if item["status"] == "MISSING_IN_OPERATION"]),
+        }
+    }
 
 
-@router.get("/", response_model=list[ReconciliationResponse])
+@router.get("/")
 def list_reconciliations(
+    upload_id: int | None = None,
+    status: str | None = None,
     db: Session = Depends(get_db)
 ):
-    return get_reconciliations(db)
+    records = get_reconciliations(db, upload_id)
 
+    if status:
+        records = [
+            item for item in records
+            if item.status == status
+        ]
 
-@router.get("/{reconciliation_id}", response_model=ReconciliationResponse)
-def get_reconciliation(
-    reconciliation_id: int,
-    db: Session = Depends(get_db)
-):
-    reconciliation = get_reconciliation_by_id(
-        db,
-        reconciliation_id
-    )
-
-    if not reconciliation:
-        raise HTTPException(
-            status_code=404,
-            detail="Conciliación no encontrada"
-        )
-
-    return reconciliation
+    return records

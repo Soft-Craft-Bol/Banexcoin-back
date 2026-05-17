@@ -7,20 +7,19 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.upload import Upload
-from app.repositories.transaction_repository import create_transaction
+from app.repositories.transaction_repository import (
+    bulk_create_transactions,
+    delete_transactions_by_upload,
+)
 from app.repositories.upload_repository import create_upload, get_uploads, update_upload_status
 from app.schemas.upload import UploadResponse
-from app.services.excel_service import (
-    SUPPORTED_EXTENSIONS,
-    dataframe_to_transactions,
-    read_financial_file,
-)
-
-
+from app.services.excel_service import SUPPORTED_EXTENSIONS, read_financial_file
+from app.services.normalization_service import normalize_workbook
 
 router = APIRouter(prefix="/uploads", tags=["Uploads"])
 
 UPLOAD_DIR = "app/uploads"
+
 
 @router.post("/", response_model=UploadResponse)
 async def upload_file(
@@ -57,15 +56,18 @@ async def upload_file(
         if not valid_sheets:
             raise ValueError(f"No se pudo procesar ninguna hoja. Errores: {sheet_errors}")
 
-        transactions = dataframe_to_transactions(valid_sheets, default_source=source)
+        normalized_transactions = normalize_workbook(
+            upload_id=upload.id,
+            valid_sheets=valid_sheets
+        )
 
-        if not transactions:
-            raise ValueError("El archivo no contiene transacciones válidas para guardar")
+        if not normalized_transactions:
+            raise ValueError("El archivo fue leído, pero no se generaron movimientos normalizados")
 
-        for transaction in transactions:
-            create_transaction(db, transaction)
+        delete_transactions_by_upload(db, upload.id)
+        bulk_create_transactions(db, normalized_transactions)
 
-        total_rows = len(transactions)
+        total_rows = len(normalized_transactions)
 
         return update_upload_status(
             db=db,
@@ -85,6 +87,7 @@ async def upload_file(
         )
 
         raise HTTPException(status_code=400, detail=str(exc))
+
 
 @router.get("/", response_model=list[UploadResponse])
 def list_uploaded_files(db: Session = Depends(get_db)):
