@@ -468,10 +468,8 @@ def reconciliation_dashboard_stats(
     OperationTx = aliased(Transaction)
     BankTx = aliased(Transaction)
 
+    # Archivos: SIEMPRE cuenta todos los uploads, no por upload_id
     upload_query = db.query(Upload)
-
-    if upload_id:
-        upload_query = upload_query.filter(Upload.id == upload_id)
 
     total_files = upload_query.count()
 
@@ -493,6 +491,7 @@ def reconciliation_dashboard_stats(
         .count()
     )
 
+    # Movimientos: estos sí pueden filtrarse por upload_id
     total_movements_query = db.query(Transaction)
 
     if upload_id:
@@ -510,6 +509,7 @@ def reconciliation_dashboard_stats(
         or 0
     )
 
+    # Conciliaciones: estas sí pueden filtrarse por upload_id
     reconciliation_query = db.query(Reconciliation)
 
     if upload_id:
